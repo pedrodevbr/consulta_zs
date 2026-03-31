@@ -1,6 +1,6 @@
 """
-Consultas ZS - Itaipu Binacional
-CustomTkinter GUI with enhanced ticket details and comments view.
+Consultas ZS — Itaipu Binacional
+CustomTkinter GUI: one material at a time, LLM-powered analysis.
 """
 
 import logging
@@ -10,15 +10,14 @@ from datetime import datetime
 import customtkinter as ctk
 
 from config import Config, setup_logging
-from jira_service import JiraService
 from process_manager import ProcessManager
+from llm_service import analyze_material
 
 logger = logging.getLogger(__name__)
 
 ctk.set_appearance_mode("dark")
 
-
-# ── Colour palette ────────────────────────────────────────────────
+# ── Palette ───────────────────────────────────────────────────────
 _P = {
     "bg":           "#0F1923",
     "surface":      "#172A3A",
@@ -31,7 +30,6 @@ _P = {
     "text":         "#E8EDF2",
     "text_dim":     "#8899AA",
     "border":       "#2A4054",
-    "success":      "#00D4AA",
     "card_bg":      "#1B3244",
 }
 
@@ -55,163 +53,30 @@ class TextboxLogHandler(logging.Handler):
             pass
 
 
-# ── Ticket Detail Dialog ─────────────────────────────────────────
-class TicketDetailDialog(ctk.CTkToplevel):
-    """Shows full ticket details and comments in a modal window."""
-
-    def __init__(self, parent, ticket_details: dict):
-        super().__init__(parent)
-        self.title(f"Ticket {ticket_details['key']}")
-        self.geometry("700x600")
-        self.minsize(500, 400)
-        self.configure(fg_color=_P["bg"])
-        self.transient(parent)
-        self.grab_set()
-
-        self._build(ticket_details)
-
-    def _build(self, t):
-        scroll = ctk.CTkScrollableFrame(
-            self, fg_color=_P["bg"],
-            scrollbar_button_color=_P["border"],
-            scrollbar_button_hover_color=_P["accent"],
-        )
-        scroll.pack(fill="both", expand=True, padx=12, pady=12)
-
-        # ── Header ──
-        header = ctk.CTkFrame(scroll, fg_color=_P["surface"], corner_radius=10)
-        header.pack(fill="x", pady=(0, 10))
-
-        ctk.CTkLabel(
-            header, text=t["key"],
-            font=ctk.CTkFont(family="Consolas", size=20, weight="bold"),
-            text_color=_P["accent"],
-        ).pack(anchor="w", padx=16, pady=(12, 2))
-
-        ctk.CTkLabel(
-            header, text=t["summary"],
-            font=ctk.CTkFont(size=14),
-            text_color=_P["text"], wraplength=600,
-        ).pack(anchor="w", padx=16, pady=(0, 12))
-
-        # ── Info grid ──
-        info_frame = ctk.CTkFrame(scroll, fg_color=_P["surface"], corner_radius=10)
-        info_frame.pack(fill="x", pady=(0, 10))
-
-        fields = [
-            ("Status", t["status"]),
-            ("Responsavel", t["assignee"]),
-            ("Relator", t["reporter"]),
-            ("Prioridade", t["priority"]),
-            ("Criado", t["created"][:19].replace("T", " ")),
-            ("Atualizado", t["updated"][:19].replace("T", " ")),
-            ("Tipo", t["tipo"]),
-            ("Pecas em estoque", t["pieces_in_stock"]),
-        ]
-        for i, (label, value) in enumerate(fields):
-            row_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
-            row_frame.pack(fill="x", padx=16, pady=2)
-            ctk.CTkLabel(
-                row_frame, text=f"{label}:", width=140,
-                font=ctk.CTkFont(size=11), text_color=_P["text_dim"], anchor="w",
-            ).pack(side="left")
-            status_color = _P["text"]
-            if label == "Status":
-                status_color = self._status_color(value)
-            ctk.CTkLabel(
-                row_frame, text=value or "-",
-                font=ctk.CTkFont(size=12, weight="bold" if label == "Status" else "normal"),
-                text_color=status_color, anchor="w",
-            ).pack(side="left", padx=(4, 0))
-
-        # ── Description ──
-        if t.get("description"):
-            desc_frame = ctk.CTkFrame(scroll, fg_color=_P["surface"], corner_radius=10)
-            desc_frame.pack(fill="x", pady=(0, 10))
-            ctk.CTkLabel(
-                desc_frame, text="Descricao",
-                font=ctk.CTkFont(size=13, weight="bold"), text_color=_P["text"],
-            ).pack(anchor="w", padx=16, pady=(10, 4))
-            desc_text = ctk.CTkTextbox(
-                desc_frame, height=100,
-                font=ctk.CTkFont(size=12), fg_color=_P["bg"],
-                text_color=_P["text"], border_width=0, corner_radius=6,
-            )
-            desc_text.pack(fill="x", padx=16, pady=(0, 10))
-            desc_text.insert("1.0", t["description"])
-            desc_text.configure(state="disabled")
-
-        # ── Comments ──
-        comments = t.get("comments", [])
-        comments_header = ctk.CTkFrame(scroll, fg_color=_P["surface"], corner_radius=10)
-        comments_header.pack(fill="x", pady=(0, 6))
-        ctk.CTkLabel(
-            comments_header,
-            text=f"Comentarios ({len(comments)})",
-            font=ctk.CTkFont(size=13, weight="bold"), text_color=_P["text"],
-        ).pack(anchor="w", padx=16, pady=10)
-
-        if not comments:
-            ctk.CTkLabel(
-                scroll, text="Nenhum comentario.",
-                font=ctk.CTkFont(size=12), text_color=_P["text_dim"],
-            ).pack(pady=10)
-        else:
-            for c in comments:
-                self._build_comment_card(scroll, c)
-
-    def _build_comment_card(self, parent, comment):
-        card = ctk.CTkFrame(parent, fg_color=_P["card_bg"], corner_radius=8,
-                            border_width=1, border_color=_P["border"])
-        card.pack(fill="x", pady=3)
-
-        top = ctk.CTkFrame(card, fg_color="transparent")
-        top.pack(fill="x", padx=12, pady=(8, 2))
-
-        ctk.CTkLabel(
-            top, text=comment.get("author", "?"),
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=_P["accent"],
-        ).pack(side="left")
-
-        date_str = comment.get("created", "")[:16].replace("T", " ")
-        ctk.CTkLabel(
-            top, text=date_str,
-            font=ctk.CTkFont(size=10), text_color=_P["text_dim"],
-        ).pack(side="right")
-
-        ctk.CTkLabel(
-            card, text=comment.get("body", ""),
-            font=ctk.CTkFont(size=11), text_color=_P["text"],
-            wraplength=600, justify="left", anchor="w",
-        ).pack(fill="x", padx=12, pady=(2, 10))
-
-    @staticmethod
-    def _status_color(status):
-        s = status.lower()
-        if any(w in s for w in ("done", "terminado", "concluido", "fechado")):
-            return _P["success"]
-        if any(w in s for w in ("progress", "andamento", "aberto")):
-            return _P["warn"]
-        return _P["text"]
-
-
-# ── Main App ─────────────────────────────────────────────────────
+# ── Main App ──────────────────────────────────────────────────────
 class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Consultas ZS  -  Itaipu Binacional")
-        self.geometry("1120x720")
-        self.minsize(900, 600)
+        self.title("Consultas ZS — Itaipu Binacional")
+        self.geometry("1000x680")
+        self.minsize(800, 550)
         self.configure(fg_color=_P["bg"])
 
         self.manager = ProcessManager(use_com_init=True)
-        self._card_widgets: list = []
+
+        # Data lists — populated after loading
+        self._new_items = []       # rows for "Novas Consultas"
+        self._open_items = []      # rows for "Em Consulta"
+        self._new_idx = 0
+        self._open_idx = 0
+
+        # Current LLM analysis cache {material_code: dict}
+        self._analysis_cache = {}
 
         self._build_layout()
         self._attach_logger()
-
-        logger.info("Sistema iniciado. Clique em Carregar Dados para comecar.")
+        logger.info("Sistema iniciado.")
 
     # ── Layout ────────────────────────────────────────────────────
 
@@ -220,597 +85,672 @@ class App(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
 
         # ── Sidebar ───────────────────────────────────────────────
-        sidebar = ctk.CTkFrame(
-            self, width=260, corner_radius=0,
-            fg_color=_P["surface"], border_width=0,
-        )
+        sidebar = ctk.CTkFrame(self, width=240, corner_radius=0,
+                               fg_color=_P["surface"])
         sidebar.grid(row=0, column=0, sticky="nsew")
-        sidebar.grid_rowconfigure(8, weight=1)
+        sidebar.grid_rowconfigure(7, weight=1)
         sidebar.grid_propagate(False)
 
-        # Logo area
-        logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        logo_frame.grid(row=0, column=0, padx=20, pady=(28, 4), sticky="ew")
         ctk.CTkLabel(
-            logo_frame, text=">>",
-            font=ctk.CTkFont(size=28), text_color=_P["accent"],
-        ).pack(side="left")
+            sidebar, text="CONSULTAS ZS",
+            font=ctk.CTkFont(family="Consolas", size=16, weight="bold"),
+            text_color=_P["accent"],
+        ).grid(row=0, column=0, padx=20, pady=(24, 2), sticky="w")
         ctk.CTkLabel(
-            logo_frame, text=" CONSULTAS ZS",
-            font=ctk.CTkFont(family="Consolas", size=18, weight="bold"),
-            text_color=_P["text"],
-        ).pack(side="left", padx=(4, 0))
+            sidebar, text="Gestão de Materiais Críticos",
+            font=ctk.CTkFont(size=10), text_color=_P["text_dim"],
+        ).grid(row=1, column=0, padx=20, pady=(0, 16), sticky="w")
 
-        ctk.CTkLabel(
-            sidebar, text="Gestao de Materiais Criticos",
-            font=ctk.CTkFont(size=11), text_color=_P["text_dim"],
-        ).grid(row=1, column=0, padx=24, pady=(0, 20), sticky="w")
+        ctk.CTkFrame(sidebar, height=1, fg_color=_P["border"]
+                      ).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 12))
 
-        ctk.CTkFrame(
-            sidebar, height=1, fg_color=_P["border"]
-        ).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 16))
-
-        # Buttons
-        btn_style = dict(
-            height=42, corner_radius=8,
-            font=ctk.CTkFont(size=13, weight="bold"), border_width=0,
-        )
+        btn = dict(height=38, corner_radius=8, border_width=0,
+                   font=ctk.CTkFont(size=12, weight="bold"))
 
         self.btn_extract = ctk.CTkButton(
-            sidebar, text="  Extrair Relatorios SAP",
-            fg_color=_P["surface_alt"], hover_color=_P["border"],
-            text_color=_P["text"], command=self._on_extract, **btn_style,
-        )
-        self.btn_extract.grid(row=3, column=0, padx=16, pady=(0, 8), sticky="ew")
+            sidebar, text="Extrair SAP", fg_color=_P["surface_alt"],
+            hover_color=_P["border"], text_color=_P["text"],
+            command=self._on_extract, **btn)
+        self.btn_extract.grid(row=3, column=0, padx=16, pady=(0, 6), sticky="ew")
 
         self.btn_load = ctk.CTkButton(
-            sidebar, text="  Carregar & Processar Dados",
-            fg_color=_P["accent"], hover_color=_P["accent_hover"],
-            text_color=_P["bg"], command=self._on_load, **btn_style,
-        )
-        self.btn_load.grid(row=4, column=0, padx=16, pady=(0, 8), sticky="ew")
+            sidebar, text="Carregar Dados", fg_color=_P["accent"],
+            hover_color=_P["accent_hover"], text_color=_P["bg"],
+            command=self._on_load, **btn)
+        self.btn_load.grid(row=4, column=0, padx=16, pady=(0, 6), sticky="ew")
 
         self.btn_check = ctk.CTkButton(
-            sidebar, text="  Verificar Consultas Abertas",
-            fg_color=_P["surface_alt"], hover_color=_P["border"],
-            text_color=_P["text"], command=self._on_check,
-            state="disabled", **btn_style,
-        )
-        self.btn_check.grid(row=5, column=0, padx=16, pady=(0, 8), sticky="ew")
+            sidebar, text="Verificar Abertas", fg_color=_P["surface_alt"],
+            hover_color=_P["border"], text_color=_P["text"],
+            command=self._on_check, state="disabled", **btn)
+        self.btn_check.grid(row=5, column=0, padx=16, pady=(0, 6), sticky="ew")
 
-        ctk.CTkFrame(
-            sidebar, height=1, fg_color=_P["border"]
-        ).grid(row=6, column=0, sticky="ew", padx=16, pady=12)
+        ctk.CTkFrame(sidebar, height=1, fg_color=_P["border"]
+                      ).grid(row=6, column=0, sticky="ew", padx=16, pady=8)
 
-        # Stats panel
-        self.stats_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        self.stats_frame.grid(row=7, column=0, padx=20, sticky="ew")
-
-        self.lbl_stat_total = self._stat_label(self.stats_frame, "Total ZS", "-", 0)
-        self.lbl_stat_open = self._stat_label(self.stats_frame, "Para abrir", "-", 1)
-        self.lbl_stat_progress = self._stat_label(self.stats_frame, "Em consulta", "-", 2)
+        # Stats
+        sf = ctk.CTkFrame(sidebar, fg_color="transparent")
+        sf.grid(row=7, column=0, padx=20, sticky="new")
+        self.lbl_total = self._stat(sf, "Total ZS", 0)
+        self.lbl_new = self._stat(sf, "Novas", 1)
+        self.lbl_open = self._stat(sf, "Em consulta", 2)
 
         ctk.CTkLabel(
-            sidebar, text=f"v2.0 - {datetime.now():%Y}",
-            font=ctk.CTkFont(size=10), text_color=_P["text_dim"],
-        ).grid(row=9, column=0, padx=20, pady=(0, 16), sticky="s")
+            sidebar, text=f"v3.0 — {datetime.now():%Y}",
+            font=ctk.CTkFont(size=9), text_color=_P["text_dim"],
+        ).grid(row=8, column=0, padx=20, pady=(0, 12), sticky="s")
 
-        # ── Main content ──────────────────────────────────────────
+        # ── Main area ─────────────────────────────────────────────
         main = ctk.CTkFrame(self, fg_color=_P["bg"], corner_radius=0)
         main.grid(row=0, column=1, sticky="nsew")
         main.grid_rowconfigure(0, weight=1)
         main.grid_columnconfigure(0, weight=1)
 
         self.tabview = ctk.CTkTabview(
-            main,
-            fg_color=_P["surface"],
+            main, fg_color=_P["surface"],
             segmented_button_fg_color=_P["surface_alt"],
             segmented_button_selected_color=_P["accent"],
             segmented_button_selected_hover_color=_P["accent_hover"],
             segmented_button_unselected_color=_P["surface_alt"],
             segmented_button_unselected_hover_color=_P["border"],
-            text_color=_P["bg"],
-            corner_radius=12, border_width=1, border_color=_P["border"],
-        )
-        self.tabview.grid(row=0, column=0, padx=16, pady=16, sticky="nsew")
+            text_color=_P["bg"], corner_radius=10,
+            border_width=1, border_color=_P["border"])
+        self.tabview.grid(row=0, column=0, padx=12, pady=12, sticky="nsew")
 
-        tab_cards = self.tabview.add("  Novas Consultas  ")
-        tab_em_consulta = self.tabview.add("  Em Consulta  ")
-        tab_logs = self.tabview.add("  Console  ")
+        self.tab_new = self.tabview.add("Novas Consultas")
+        self.tab_open = self.tabview.add("Em Consulta")
+        self.tab_log = self.tabview.add("Console")
 
-        # ── Tab: Novas Consultas ──
-        tab_cards.grid_rowconfigure(0, weight=1)
-        tab_cards.grid_columnconfigure(0, weight=1)
+        for tab in (self.tab_new, self.tab_open, self.tab_log):
+            tab.grid_rowconfigure(0, weight=1)
+            tab.grid_columnconfigure(0, weight=1)
 
-        self.scroll_cards = ctk.CTkScrollableFrame(
-            tab_cards, fg_color="transparent",
-            scrollbar_button_color=_P["border"],
-            scrollbar_button_hover_color=_P["accent"],
-        )
-        self.scroll_cards.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        # ── Novas Consultas — single-item view ────────────────────
+        self.new_frame = ctk.CTkFrame(self.tab_new, fg_color="transparent")
+        self.new_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        self.new_frame.grid_rowconfigure(0, weight=1)
+        self.new_frame.grid_columnconfigure(0, weight=1)
+        self._new_placeholder("Carregue os dados para começar.")
 
-        self.lbl_empty = ctk.CTkLabel(
-            self.scroll_cards,
-            text='Nenhum dado carregado.\nClique em "Carregar & Processar Dados" para iniciar.',
-            font=ctk.CTkFont(size=13), text_color=_P["text_dim"], justify="center",
-        )
-        self.lbl_empty.pack(pady=80)
+        # ── Em Consulta — single-item view ────────────────────────
+        self.open_frame = ctk.CTkFrame(self.tab_open, fg_color="transparent")
+        self.open_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        self.open_frame.grid_rowconfigure(0, weight=1)
+        self.open_frame.grid_columnconfigure(0, weight=1)
+        self._open_placeholder("Carregue os dados para começar.")
 
-        # ── Tab: Em Consulta ──
-        tab_em_consulta.grid_rowconfigure(0, weight=1)
-        tab_em_consulta.grid_columnconfigure(0, weight=1)
-
-        self.scroll_em_consulta = ctk.CTkScrollableFrame(
-            tab_em_consulta, fg_color="transparent",
-            scrollbar_button_color=_P["border"],
-            scrollbar_button_hover_color=_P["accent"],
-        )
-        self.scroll_em_consulta.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-
-        self.lbl_empty_consulta = ctk.CTkLabel(
-            self.scroll_em_consulta,
-            text="Nenhum item em consulta.\nCarregue os dados primeiro.",
-            font=ctk.CTkFont(size=13), text_color=_P["text_dim"], justify="center",
-        )
-        self.lbl_empty_consulta.pack(pady=80)
-
-        # ── Tab: Console ──
-        tab_logs.grid_rowconfigure(0, weight=1)
-        tab_logs.grid_columnconfigure(0, weight=1)
-
-        self.log_textbox = ctk.CTkTextbox(
-            tab_logs,
-            font=ctk.CTkFont(family="Consolas", size=12),
+        # ── Console ───────────────────────────────────────────────
+        self.log_box = ctk.CTkTextbox(
+            self.tab_log, font=ctk.CTkFont(family="Consolas", size=11),
             fg_color=_P["bg"], text_color=_P["accent"],
             border_width=1, border_color=_P["border"],
-            corner_radius=8, state="disabled",
-        )
-        self.log_textbox.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+            corner_radius=6, state="disabled")
+        self.log_box.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
 
     # ── Helpers ───────────────────────────────────────────────────
 
-    def _stat_label(self, parent, title, value, row):
-        frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.grid(row=row, column=0, sticky="ew", pady=3)
-        ctk.CTkLabel(
-            frame, text=title,
-            font=ctk.CTkFont(size=11), text_color=_P["text_dim"],
-        ).pack(side="left")
-        lbl = ctk.CTkLabel(
-            frame, text=value,
-            font=ctk.CTkFont(size=13, weight="bold"), text_color=_P["accent"],
-        )
+    def _stat(self, parent, title, row):
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        f.grid(row=row, column=0, sticky="ew", pady=2)
+        ctk.CTkLabel(f, text=title, font=ctk.CTkFont(size=10),
+                     text_color=_P["text_dim"]).pack(side="left")
+        lbl = ctk.CTkLabel(f, text="—", font=ctk.CTkFont(size=12, weight="bold"),
+                           text_color=_P["accent"])
         lbl.pack(side="right")
         return lbl
 
+    def _attach_logger(self):
+        h = TextboxLogHandler(self.log_box)
+        h.setFormatter(logging.Formatter("%(asctime)s — %(levelname)s — %(message)s"))
+        logging.getLogger().addHandler(h)
+
+    def _clear(self, frame):
+        for w in frame.winfo_children():
+            w.destroy()
+
+    def _new_placeholder(self, text):
+        self._clear(self.new_frame)
+        ctk.CTkLabel(self.new_frame, text=text, font=ctk.CTkFont(size=12),
+                     text_color=_P["text_dim"]).place(relx=0.5, rely=0.5, anchor="center")
+
+    def _open_placeholder(self, text):
+        self._clear(self.open_frame)
+        ctk.CTkLabel(self.open_frame, text=text, font=ctk.CTkFont(size=12),
+                     text_color=_P["text_dim"]).place(relx=0.5, rely=0.5, anchor="center")
+
     def _update_stats(self):
         total = len(self.manager.processor.zs_df)
-        to_open = len(self.manager.processor.get_items_to_open())
-        in_prog = len(self.manager.processor.get_items_in_consultation())
-        self.lbl_stat_total.configure(text=str(total))
-        self.lbl_stat_open.configure(text=str(to_open))
-        self.lbl_stat_progress.configure(text=str(in_prog))
-
-    def _attach_logger(self):
-        handler = TextboxLogHandler(self.log_textbox)
-        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-        logging.getLogger().addHandler(handler)
+        self.lbl_total.configure(text=str(total))
+        self.lbl_new.configure(text=str(len(self._new_items)))
+        self.lbl_open.configure(text=str(len(self._open_items)))
 
     @staticmethod
     def _severity_color(dias):
         try:
-            dias = int(dias)
+            d = int(dias)
         except (ValueError, TypeError):
             return _P["text_dim"]
-        if dias > 120:
+        if d > 120:
             return _P["danger"]
-        if dias > 90:
+        if d > 90:
             return _P["warn"]
         return _P["accent"]
+
+    @staticmethod
+    def _conf_color(conf):
+        if conf == "alta":
+            return _P["accent"]
+        if conf == "media":
+            return _P["warn"]
+        return _P["danger"]
 
     # ── Thread wrappers ───────────────────────────────────────────
 
     def _on_extract(self):
-        self.btn_extract.configure(state="disabled", text="  Extraindo...")
-        self.tabview.set("  Console  ")
-
-        def _work():
+        self.btn_extract.configure(state="disabled", text="Extraindo…")
+        self.tabview.set("Console")
+        def _w():
             try:
                 self.manager.extract_sap_reports()
             except Exception as e:
-                logger.error("Erro extracao: %s", e)
-            self.btn_extract.after(
-                0, lambda: self.btn_extract.configure(
-                    state="normal", text="  Extrair Relatorios SAP"),
-            )
-
-        threading.Thread(target=_work, daemon=True).start()
+                logger.error("Erro extração: %s", e)
+            self.btn_extract.after(0, lambda: self.btn_extract.configure(
+                state="normal", text="Extrair SAP"))
+        threading.Thread(target=_w, daemon=True).start()
 
     def _on_load(self):
-        self.btn_load.configure(state="disabled", text="  Processando...")
-
-        def _work():
+        self.btn_load.configure(state="disabled", text="Processando…")
+        def _w():
             self.manager.init_connections()
             if self.manager.run_data_pipeline():
-                self.after(0, self._build_cards)
-                self.after(0, self._build_em_consulta_cards)
+                new = self.manager.processor.get_items_to_open()
+                opn = self.manager.processor.get_items_in_consultation()
+                self._new_items = [row for _, row in new.iterrows()]
+                self._open_items = [row for _, row in opn.iterrows()]
+                self._new_idx = 0
+                self._open_idx = 0
+                self._analysis_cache.clear()
                 self.after(0, self._update_stats)
-                self.btn_check.after(
-                    0, lambda: self.btn_check.configure(state="normal"),
-                )
-                logger.info('Dados prontos! Veja as abas "Novas Consultas" e "Em Consulta".')
+                self.after(0, self._show_new_item)
+                self.after(0, self._show_open_item)
+                self.btn_check.after(0, lambda: self.btn_check.configure(state="normal"))
+                logger.info("Dados carregados — %d novas, %d em consulta.",
+                            len(self._new_items), len(self._open_items))
             else:
                 logger.error("Falha ao carregar planilhas.")
-            self.btn_load.after(
-                0, lambda: self.btn_load.configure(
-                    state="normal", text="  Atualizar Dados"),
-            )
-
-        threading.Thread(target=_work, daemon=True).start()
+            self.btn_load.after(0, lambda: self.btn_load.configure(
+                state="normal", text="Carregar Dados"))
+        threading.Thread(target=_w, daemon=True).start()
 
     def _on_check(self):
-        self.btn_check.configure(state="disabled", text="  Verificando...")
-        self.tabview.set("  Console  ")
-
-        def _work():
+        self.btn_check.configure(state="disabled", text="Verificando…")
+        self.tabview.set("Console")
+        def _w():
             self.manager.check_open_consultations()
-            logger.info("Verificacao concluida.")
-            self.after(0, self._build_em_consulta_cards)
-            self.btn_check.after(
-                0, lambda: self.btn_check.configure(
-                    state="normal", text="  Verificar Consultas Abertas"),
-            )
+            logger.info("Verificação concluída.")
+            self.btn_check.after(0, lambda: self.btn_check.configure(
+                state="normal", text="Verificar Abertas"))
+        threading.Thread(target=_w, daemon=True).start()
 
-        threading.Thread(target=_work, daemon=True).start()
+    # ══════════════════════════════════════════════════════════════
+    # NOVAS CONSULTAS — one at a time
+    # ══════════════════════════════════════════════════════════════
 
-    # ── Card builder — Novas Consultas ────────────────────────────
-
-    def _build_cards(self):
-        for w in self.scroll_cards.winfo_children():
-            w.destroy()
-        self._card_widgets.clear()
-
-        items = self.manager.processor.get_items_to_open()
-        if items.empty:
-            ctk.CTkLabel(
-                self.scroll_cards,
-                text="Nenhum item pendente para abrir consulta.",
-                font=ctk.CTkFont(size=13), text_color=_P["text_dim"],
-            ).pack(pady=60)
+    def _show_new_item(self):
+        self._clear(self.new_frame)
+        if not self._new_items:
+            self._new_placeholder("Nenhum item pendente.")
+            return
+        if self._new_idx >= len(self._new_items):
+            self._new_placeholder("Todos os itens foram processados.")
             return
 
-        for idx, (_, row) in enumerate(items.iterrows()):
-            self._create_card(row, idx)
-
-    def _create_card(self, row, idx: int):
-        card = ctk.CTkFrame(
-            self.scroll_cards, fg_color=_P["card_bg"],
-            corner_radius=10, border_width=1, border_color=_P["border"],
-        )
-        card.pack(fill="x", padx=8, pady=5)
-        card.grid_columnconfigure(1, weight=1)
-
-        material = str(row[Config.ZS_MATERIAL])
+        row = self._new_items[self._new_idx]
+        mat = str(row[Config.ZS_MATERIAL])
         desc = row.get(Config.ZS_TXT_BREVE, "")
-        lmr = row.get("LMR", "-")
         dias = row.get("Dias da quebra", "?")
         estoque = row.get(Config.ZS_UTILIZACAO_LIVRE, "?")
+        lmr = row.get("LMR", "—")
         apps = row.get("aplicacoes", "")
 
-        # Left accent bar
-        dias_color = self._severity_color(dias)
-        ctk.CTkFrame(
-            card, width=4, corner_radius=2, fg_color=dias_color,
-        ).grid(row=0, column=0, rowspan=3, sticky="ns", padx=(8, 0), pady=10)
+        # Scrollable container
+        scroll = ctk.CTkScrollableFrame(self.new_frame, fg_color="transparent",
+                                         scrollbar_button_color=_P["border"])
+        scroll.grid(row=0, column=0, sticky="nsew")
 
-        # Info block
-        info = ctk.CTkFrame(card, fg_color="transparent")
-        info.grid(row=0, column=1, sticky="ew", padx=12, pady=(10, 2))
-        info.grid_columnconfigure(0, weight=1)
+        # ── Navigation bar ────────────────────────────────────────
+        nav = ctk.CTkFrame(scroll, fg_color="transparent")
+        nav.pack(fill="x", pady=(0, 8))
 
-        # Title row
-        title_frame = ctk.CTkFrame(info, fg_color="transparent")
-        title_frame.pack(fill="x")
-        ctk.CTkLabel(
-            title_frame, text=material,
-            font=ctk.CTkFont(family="Consolas", size=15, weight="bold"),
-            text_color=_P["accent"],
+        ctk.CTkButton(
+            nav, text="< Anterior", width=90, height=28, corner_radius=6,
+            fg_color=_P["surface_alt"], hover_color=_P["border"],
+            text_color=_P["text"], font=ctk.CTkFont(size=11),
+            command=self._new_prev,
+            state="normal" if self._new_idx > 0 else "disabled",
         ).pack(side="left")
+
         ctk.CTkLabel(
-            title_frame, text=f"  -  {desc}",
-            font=ctk.CTkFont(size=13), text_color=_P["text"],
-        ).pack(side="left", padx=(4, 0))
+            nav, text=f"{self._new_idx + 1} / {len(self._new_items)}",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=_P["text"],
+        ).pack(side="left", padx=12)
 
-        # Meta row
-        meta_frame = ctk.CTkFrame(info, fg_color="transparent")
-        meta_frame.pack(fill="x", pady=(4, 0))
-        for label, val in [("Dias quebra", dias), ("Estoque", estoque)]:
-            pill = ctk.CTkFrame(meta_frame, fg_color=_P["surface_alt"], corner_radius=6)
-            pill.pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(
-                pill, text=f" {label}: {val} ",
-                font=ctk.CTkFont(size=11), text_color=_P["text_dim"],
-            ).pack(padx=6, pady=2)
+        ctk.CTkButton(
+            nav, text="Próximo >", width=90, height=28, corner_radius=6,
+            fg_color=_P["surface_alt"], hover_color=_P["border"],
+            text_color=_P["text"], font=ctk.CTkFont(size=11),
+            command=self._new_next,
+            state="normal" if self._new_idx < len(self._new_items) - 1 else "disabled",
+        ).pack(side="left")
 
-        # LMR + Aplicacoes
-        detail_frame = ctk.CTkFrame(card, fg_color="transparent")
-        detail_frame.grid(row=1, column=1, sticky="ew", padx=12, pady=(4, 2))
+        # ── Material info ─────────────────────────────────────────
+        info = ctk.CTkFrame(scroll, fg_color=_P["card_bg"], corner_radius=8)
+        info.pack(fill="x", pady=(0, 6))
 
-        lmr_display = str(lmr) if len(str(lmr)) < 80 else str(lmr)[:77] + "..."
+        # Title
         ctk.CTkLabel(
-            detail_frame, text=f"LMR: {lmr_display}",
-            font=ctk.CTkFont(size=11), text_color=_P["text_dim"], anchor="w",
-        ).pack(fill="x")
+            info, text=f"{mat}  —  {desc}",
+            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
+            text_color=_P["accent"],
+        ).pack(anchor="w", padx=12, pady=(10, 4))
 
+        # Pills
+        pills = ctk.CTkFrame(info, fg_color="transparent")
+        pills.pack(fill="x", padx=12, pady=(0, 4))
+        for label, val, color in [
+            ("Dias quebra", dias, self._severity_color(dias)),
+            ("Estoque", estoque, _P["text"]),
+        ]:
+            p = ctk.CTkFrame(pills, fg_color=_P["surface_alt"], corner_radius=4)
+            p.pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(p, text=f" {label}: {val} ", font=ctk.CTkFont(size=10),
+                         text_color=color).pack(padx=4, pady=2)
+
+        # LMR + Apps
+        if lmr:
+            ctk.CTkLabel(info, text=f"LMR: {lmr}", font=ctk.CTkFont(size=10),
+                         text_color=_P["text_dim"], wraplength=600,
+                         anchor="w").pack(fill="x", padx=12, pady=(0, 2))
         if apps:
-            apps_short = apps if len(apps) < 100 else apps[:97] + "..."
-            ctk.CTkLabel(
-                detail_frame, text=f"Aplicacoes: {apps_short}",
-                font=ctk.CTkFont(size=11), text_color=_P["text_dim"], anchor="w",
-            ).pack(fill="x")
+            ctk.CTkLabel(info, text=f"Aplicações: {apps[:200]}", font=ctk.CTkFont(size=10),
+                         text_color=_P["text_dim"], wraplength=600, anchor="w",
+                         justify="left").pack(fill="x", padx=12, pady=(0, 8))
+        else:
+            # padding
+            ctk.CTkFrame(info, height=4, fg_color="transparent").pack()
 
-        # Existing ticket info (loaded async)
-        ticket_info_frame = ctk.CTkFrame(card, fg_color="transparent")
-        ticket_info_frame.grid(row=2, column=1, sticky="ew", padx=12, pady=(0, 6))
+        # ── Action buttons ────────────────────────────────────────
+        btns = ctk.CTkFrame(scroll, fg_color="transparent")
+        btns.pack(fill="x", pady=(0, 8))
 
-        # Buttons
-        btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        btn_frame.grid(row=0, column=2, rowspan=3, padx=(0, 12), pady=10)
-
-        btn_approve = ctk.CTkButton(
-            btn_frame, text="Criar Chamado", width=140, height=36,
-            corner_radius=8, fg_color=_P["accent"], hover_color=_P["accent_hover"],
+        self._btn_approve = ctk.CTkButton(
+            btns, text="Criar Chamado", height=34, corner_radius=6,
+            fg_color=_P["accent"], hover_color=_P["accent_hover"],
             text_color=_P["bg"], font=ctk.CTkFont(size=12, weight="bold"),
-            command=lambda r=row, c=card: self._approve(r, c),
-        )
-        btn_approve.pack(pady=(0, 6))
+            command=lambda: self._approve_new(row))
+        self._btn_approve.pack(side="left", padx=(0, 8))
 
-        btn_detail = ctk.CTkButton(
-            btn_frame, text="Ver Tickets", width=140, height=30,
-            corner_radius=8, fg_color=_P["surface_alt"], hover_color=_P["border"],
-            text_color=_P["accent"], font=ctk.CTkFont(size=11),
-            command=lambda m=material, f=ticket_info_frame: self._show_existing_tickets(m, f),
-        )
-        btn_detail.pack(pady=(0, 6))
-
-        btn_skip = ctk.CTkButton(
-            btn_frame, text="Pular", width=140, height=30,
-            corner_radius=8, fg_color=_P["surface_alt"], hover_color=_P["danger_hover"],
+        ctk.CTkButton(
+            btns, text="Pular", height=34, corner_radius=6, width=80,
+            fg_color=_P["surface_alt"], hover_color=_P["danger_hover"],
             text_color=_P["danger"], font=ctk.CTkFont(size=11),
-            command=lambda c=card: c.destroy(),
-        )
-        btn_skip.pack()
+            command=self._skip_new).pack(side="left")
 
-        self._card_widgets.append(card)
+        # ── LLM analysis area ─────────────────────────────────────
+        self._llm_frame_new = ctk.CTkFrame(scroll, fg_color=_P["surface_alt"],
+                                           corner_radius=8)
+        self._llm_frame_new.pack(fill="x", pady=(0, 6))
 
-    def _show_existing_tickets(self, material, frame):
-        """Search for existing tickets for a material and show inline."""
-        for w in frame.winfo_children():
-            w.destroy()
+        # ── Tickets area ──────────────────────────────────────────
+        self._tickets_frame_new = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._tickets_frame_new.pack(fill="x")
 
-        loading = ctk.CTkLabel(
-            frame, text="Buscando tickets...",
+        # Kick off async loading
+        self._load_new_analysis(mat, row)
+
+    def _load_new_analysis(self, material, row):
+        """Load tickets + LLM analysis for a new-consultation item."""
+        ctk.CTkLabel(
+            self._llm_frame_new, text="Analisando com IA…",
             font=ctk.CTkFont(size=11), text_color=_P["warn"],
-        )
-        loading.pack(anchor="w")
+        ).pack(padx=12, pady=8)
 
         def _work():
+            # Fetch tickets
+            tickets = []
             try:
                 issues = self.manager.jira.search_tickets(material, max_results=10)
-                details_list = []
-                for issue in issues:
-                    details_list.append(self.manager.jira.get_ticket_details(issue))
+                for iss in issues:
+                    tickets.append(self.manager.jira.get_ticket_details(iss))
             except Exception as e:
-                logger.error("Erro buscando tickets para %s: %s", material, e)
-                details_list = []
+                logger.error("Erro buscando tickets %s: %s", material, e)
+
+            # LLM analysis
+            mat_info = {
+                "codigo": material,
+                "descricao": row.get(Config.ZS_TXT_BREVE, ""),
+                "dias_quebra": row.get("Dias da quebra", "?"),
+                "estoque": row.get(Config.ZS_UTILIZACAO_LIVRE, "?"),
+                "lmr": row.get("LMR", ""),
+                "aplicacoes": row.get("aplicacoes", ""),
+                "all_desat": row.get("All_Desat", False),
+            }
+
+            if material in self._analysis_cache:
+                analysis = self._analysis_cache[material]
+            else:
+                analysis = analyze_material(mat_info, tickets)
+                self._analysis_cache[material] = analysis
 
             def _update():
-                loading.destroy()
-                if not details_list:
-                    ctk.CTkLabel(
-                        frame, text="Nenhum ticket existente.",
-                        font=ctk.CTkFont(size=11), text_color=_P["text_dim"],
-                    ).pack(anchor="w")
-                    return
-
-                for t in details_list:
-                    row_frame = ctk.CTkFrame(frame, fg_color=_P["surface_alt"], corner_radius=6)
-                    row_frame.pack(fill="x", pady=2)
-
-                    status_color = TicketDetailDialog._status_color(t["status"])
-                    ctk.CTkLabel(
-                        row_frame, text=t["key"],
-                        font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
-                        text_color=_P["accent"],
-                    ).pack(side="left", padx=(8, 4), pady=4)
-                    ctk.CTkLabel(
-                        row_frame, text=t["status"],
-                        font=ctk.CTkFont(size=11, weight="bold"),
-                        text_color=status_color,
-                    ).pack(side="left", padx=(0, 8))
-
-                    n_comments = len(t.get("comments", []))
-                    ctk.CTkLabel(
-                        row_frame, text=f"{n_comments} comentario(s)",
-                        font=ctk.CTkFont(size=10), text_color=_P["text_dim"],
-                    ).pack(side="left")
-
-                    ctk.CTkButton(
-                        row_frame, text="Detalhes", width=70, height=24,
-                        corner_radius=4, fg_color=_P["border"],
-                        hover_color=_P["accent"], text_color=_P["text"],
-                        font=ctk.CTkFont(size=10),
-                        command=lambda details=t: TicketDetailDialog(self, details),
-                    ).pack(side="right", padx=8, pady=4)
-
-            frame.after(0, _update)
+                self._render_llm_result(self._llm_frame_new, analysis)
+                self._render_tickets(self._tickets_frame_new, tickets)
+            self.after(0, _update)
 
         threading.Thread(target=_work, daemon=True).start()
 
-    # ── Card builder — Em Consulta ────────────────────────────────
+    def _render_llm_result(self, frame, analysis):
+        """Render LLM analysis result inside frame."""
+        self._clear(frame)
 
-    def _build_em_consulta_cards(self):
-        for w in self.scroll_em_consulta.winfo_children():
-            w.destroy()
+        # Header
+        ctk.CTkLabel(
+            frame, text="Análise IA",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=_P["text"],
+        ).pack(anchor="w", padx=12, pady=(8, 4))
 
-        items = self.manager.processor.get_items_in_consultation()
-        if items.empty:
+        # Recommendation
+        acao = analysis.get("acao", "—")
+        conf = analysis.get("confianca", "baixa")
+        resolvido = analysis.get("resolvido")
+        abrir = analysis.get("abrir_nova")
+        justificativa = analysis.get("justificativa", "")
+
+        # Action line
+        action_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        action_frame.pack(fill="x", padx=12, pady=(0, 2))
+
+        ctk.CTkLabel(
+            action_frame, text="Recomendação:",
+            font=ctk.CTkFont(size=10), text_color=_P["text_dim"],
+        ).pack(side="left")
+        ctk.CTkLabel(
+            action_frame, text=f" {acao}",
+            font=ctk.CTkFont(size=11, weight="bold"), text_color=_P["text"],
+        ).pack(side="left")
+
+        # Status pills
+        pills = ctk.CTkFrame(frame, fg_color="transparent")
+        pills.pack(fill="x", padx=12, pady=(0, 2))
+
+        if resolvido is not None:
+            color = _P["accent"] if resolvido else _P["warn"]
+            text = "Resolvido" if resolvido else "Não resolvido"
+            p = ctk.CTkFrame(pills, fg_color=_P["bg"], corner_radius=4)
+            p.pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(p, text=f" {text} ", font=ctk.CTkFont(size=10),
+                         text_color=color).pack(padx=4, pady=2)
+
+        if abrir is not None:
+            color = _P["accent"] if abrir else _P["danger"]
+            text = "Abrir nova: Sim" if abrir else "Abrir nova: Não"
+            p = ctk.CTkFrame(pills, fg_color=_P["bg"], corner_radius=4)
+            p.pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(p, text=f" {text} ", font=ctk.CTkFont(size=10),
+                         text_color=color).pack(padx=4, pady=2)
+
+        # Confidence
+        p = ctk.CTkFrame(pills, fg_color=_P["bg"], corner_radius=4)
+        p.pack(side="left")
+        ctk.CTkLabel(p, text=f" Confiança: {conf} ", font=ctk.CTkFont(size=10),
+                     text_color=self._conf_color(conf)).pack(padx=4, pady=2)
+
+        # Justification
+        if justificativa:
             ctk.CTkLabel(
-                self.scroll_em_consulta,
-                text="Nenhum item em consulta no momento.",
-                font=ctk.CTkFont(size=13), text_color=_P["text_dim"],
-            ).pack(pady=60)
+                frame, text=justificativa, font=ctk.CTkFont(size=10),
+                text_color=_P["text_dim"], wraplength=600, anchor="w", justify="left",
+            ).pack(fill="x", padx=12, pady=(2, 8))
+        else:
+            ctk.CTkFrame(frame, height=6, fg_color="transparent").pack()
+
+    def _render_tickets(self, frame, tickets):
+        """Render ticket list with comments."""
+        self._clear(frame)
+        if not tickets:
+            ctk.CTkLabel(frame, text="Nenhum ticket JIRA existente.",
+                         font=ctk.CTkFont(size=11), text_color=_P["text_dim"],
+                         ).pack(anchor="w", pady=4)
             return
 
-        for _, row in items.iterrows():
-            self._create_em_consulta_card(row)
+        ctk.CTkLabel(frame, text=f"Tickets existentes ({len(tickets)})",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=_P["text"]).pack(anchor="w", pady=(0, 4))
 
-    def _create_em_consulta_card(self, row):
-        card = ctk.CTkFrame(
-            self.scroll_em_consulta, fg_color=_P["card_bg"],
-            corner_radius=10, border_width=1, border_color=_P["border"],
-        )
-        card.pack(fill="x", padx=8, pady=5)
-        card.grid_columnconfigure(1, weight=1)
+        for t in tickets:
+            self._render_single_ticket(frame, t)
 
-        material = str(row[Config.ZS_MATERIAL])
+    def _render_single_ticket(self, parent, t):
+        """Render a single ticket card with comments."""
+        card = ctk.CTkFrame(parent, fg_color=_P["card_bg"], corner_radius=6,
+                            border_width=1, border_color=_P["border"])
+        card.pack(fill="x", pady=3)
+
+        # Header
+        hdr = ctk.CTkFrame(card, fg_color="transparent")
+        hdr.pack(fill="x", padx=10, pady=(6, 2))
+
+        ctk.CTkLabel(hdr, text=t["key"],
+                     font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+                     text_color=_P["accent"]).pack(side="left")
+
+        s_color = _P["accent"] if "done" in t["status"].lower() or "termin" in t["status"].lower() else _P["warn"]
+        ctk.CTkLabel(hdr, text=f"  [{t['status']}]",
+                     font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=s_color).pack(side="left")
+
+        ctk.CTkLabel(hdr, text=f"  {t['assignee']}",
+                     font=ctk.CTkFont(size=10),
+                     text_color=_P["text_dim"]).pack(side="left")
+
+        ctk.CTkLabel(hdr, text=t["updated"][:10],
+                     font=ctk.CTkFont(size=10),
+                     text_color=_P["text_dim"]).pack(side="right")
+
+        # Comments
+        comments = t.get("comments", [])
+        if comments:
+            for c in comments[-3:]:  # show last 3 comments
+                cf = ctk.CTkFrame(card, fg_color=_P["surface_alt"], corner_radius=4)
+                cf.pack(fill="x", padx=10, pady=2)
+
+                top = ctk.CTkFrame(cf, fg_color="transparent")
+                top.pack(fill="x", padx=8, pady=(4, 0))
+                ctk.CTkLabel(top, text=c.get("author", "?"),
+                             font=ctk.CTkFont(size=10, weight="bold"),
+                             text_color=_P["accent"]).pack(side="left")
+                ctk.CTkLabel(top, text=c.get("created", "")[:10],
+                             font=ctk.CTkFont(size=9),
+                             text_color=_P["text_dim"]).pack(side="right")
+
+                body = c.get("body", "")
+                if len(body) > 300:
+                    body = body[:297] + "…"
+                ctk.CTkLabel(cf, text=body, font=ctk.CTkFont(size=10),
+                             text_color=_P["text"], wraplength=550,
+                             anchor="w", justify="left",
+                             ).pack(fill="x", padx=8, pady=(0, 4))
+
+            if len(comments) > 3:
+                ctk.CTkLabel(card, text=f"+ {len(comments) - 3} comentário(s) anteriores",
+                             font=ctk.CTkFont(size=9), text_color=_P["text_dim"],
+                             ).pack(padx=10, pady=(0, 4))
+        else:
+            ctk.CTkLabel(card, text="Sem comentários", font=ctk.CTkFont(size=10),
+                         text_color=_P["text_dim"]).pack(padx=10, pady=(0, 6))
+
+    # ── New-item navigation ───────────────────────────────────────
+
+    def _new_prev(self):
+        if self._new_idx > 0:
+            self._new_idx -= 1
+            self._show_new_item()
+
+    def _new_next(self):
+        if self._new_idx < len(self._new_items) - 1:
+            self._new_idx += 1
+            self._show_new_item()
+
+    def _skip_new(self):
+        self._new_items.pop(self._new_idx)
+        if self._new_idx >= len(self._new_items):
+            self._new_idx = max(0, len(self._new_items) - 1)
+        self._update_stats()
+        self._show_new_item()
+
+    def _approve_new(self, row):
+        self._btn_approve.configure(state="disabled", text="Criando…")
+        def _w():
+            ok = self.manager.process_single_ticket(row)
+            def _done():
+                if ok:
+                    self._new_items.pop(self._new_idx)
+                    if self._new_idx >= len(self._new_items):
+                        self._new_idx = max(0, len(self._new_items) - 1)
+                    self._update_stats()
+                    self._show_new_item()
+                else:
+                    self._btn_approve.configure(state="normal", text="Criar Chamado")
+                    logger.warning("Falha ao criar chamado.")
+            self.after(0, _done)
+        threading.Thread(target=_w, daemon=True).start()
+
+    # ══════════════════════════════════════════════════════════════
+    # EM CONSULTA — one at a time
+    # ══════════════════════════════════════════════════════════════
+
+    def _show_open_item(self):
+        self._clear(self.open_frame)
+        if not self._open_items:
+            self._open_placeholder("Nenhum item em consulta.")
+            return
+        if self._open_idx >= len(self._open_items):
+            self._open_idx = 0
+
+        row = self._open_items[self._open_idx]
+        mat = str(row[Config.ZS_MATERIAL])
         desc = row.get(Config.ZS_TXT_BREVE, "")
-        lmr = row.get("LMR", "-")
         dias = row.get("Dias da quebra", "?")
         estoque = row.get(Config.ZS_UTILIZACAO_LIVRE, "?")
 
-        # Left accent bar
-        ctk.CTkFrame(
-            card, width=4, corner_radius=2, fg_color=_P["warn"],
-        ).grid(row=0, column=0, rowspan=2, sticky="ns", padx=(8, 0), pady=10)
+        scroll = ctk.CTkScrollableFrame(self.open_frame, fg_color="transparent",
+                                         scrollbar_button_color=_P["border"])
+        scroll.grid(row=0, column=0, sticky="nsew")
 
-        # Info
-        info = ctk.CTkFrame(card, fg_color="transparent")
-        info.grid(row=0, column=1, sticky="ew", padx=12, pady=(10, 2))
+        # Nav
+        nav = ctk.CTkFrame(scroll, fg_color="transparent")
+        nav.pack(fill="x", pady=(0, 8))
 
-        title_frame = ctk.CTkFrame(info, fg_color="transparent")
-        title_frame.pack(fill="x")
-        ctk.CTkLabel(
-            title_frame, text=material,
-            font=ctk.CTkFont(family="Consolas", size=15, weight="bold"),
-            text_color=_P["accent"],
+        ctk.CTkButton(
+            nav, text="< Anterior", width=90, height=28, corner_radius=6,
+            fg_color=_P["surface_alt"], hover_color=_P["border"],
+            text_color=_P["text"], font=ctk.CTkFont(size=11),
+            command=self._open_prev,
+            state="normal" if self._open_idx > 0 else "disabled",
         ).pack(side="left")
+
         ctk.CTkLabel(
-            title_frame, text=f"  -  {desc}",
-            font=ctk.CTkFont(size=13), text_color=_P["text"],
-        ).pack(side="left", padx=(4, 0))
+            nav, text=f"{self._open_idx + 1} / {len(self._open_items)}",
+            font=ctk.CTkFont(size=12, weight="bold"), text_color=_P["text"],
+        ).pack(side="left", padx=12)
 
-        meta_frame = ctk.CTkFrame(info, fg_color="transparent")
-        meta_frame.pack(fill="x", pady=(4, 0))
-        for label, val in [("Dias quebra", dias), ("Estoque", estoque)]:
-            pill = ctk.CTkFrame(meta_frame, fg_color=_P["surface_alt"], corner_radius=6)
-            pill.pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(
-                pill, text=f" {label}: {val} ",
-                font=ctk.CTkFont(size=11), text_color=_P["text_dim"],
-            ).pack(padx=6, pady=2)
+        ctk.CTkButton(
+            nav, text="Próximo >", width=90, height=28, corner_radius=6,
+            fg_color=_P["surface_alt"], hover_color=_P["border"],
+            text_color=_P["text"], font=ctk.CTkFont(size=11),
+            command=self._open_next,
+            state="normal" if self._open_idx < len(self._open_items) - 1 else "disabled",
+        ).pack(side="left")
 
-        lmr_display = str(lmr) if len(str(lmr)) < 80 else str(lmr)[:77] + "..."
-        lmr_frame = ctk.CTkFrame(card, fg_color="transparent")
-        lmr_frame.grid(row=1, column=1, sticky="ew", padx=12, pady=(0, 10))
+        # Material info
+        info = ctk.CTkFrame(scroll, fg_color=_P["card_bg"], corner_radius=8)
+        info.pack(fill="x", pady=(0, 6))
+
         ctk.CTkLabel(
-            lmr_frame, text=f"LMR: {lmr_display}",
-            font=ctk.CTkFont(size=11), text_color=_P["text_dim"], anchor="w",
-        ).pack(fill="x")
+            info, text=f"{mat}  —  {desc}",
+            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
+            text_color=_P["accent"],
+        ).pack(anchor="w", padx=12, pady=(10, 4))
 
-        # Ticket + comments area (loaded async)
-        ticket_area = ctk.CTkFrame(card, fg_color="transparent")
-        ticket_area.grid(row=0, column=2, rowspan=2, sticky="nsew", padx=(0, 12), pady=10)
+        pills = ctk.CTkFrame(info, fg_color="transparent")
+        pills.pack(fill="x", padx=12, pady=(0, 8))
+        for label, val, color in [
+            ("Dias quebra", dias, self._severity_color(dias)),
+            ("Estoque", estoque, _P["text"]),
+        ]:
+            p = ctk.CTkFrame(pills, fg_color=_P["surface_alt"], corner_radius=4)
+            p.pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(p, text=f" {label}: {val} ", font=ctk.CTkFont(size=10),
+                         text_color=color).pack(padx=4, pady=2)
 
-        loading = ctk.CTkLabel(
-            ticket_area, text="Carregando ticket...",
-            font=ctk.CTkFont(size=11), text_color=_P["text_dim"],
-        )
-        loading.pack(anchor="w")
+        # LLM + tickets
+        self._llm_frame_open = ctk.CTkFrame(scroll, fg_color=_P["surface_alt"],
+                                            corner_radius=8)
+        self._llm_frame_open.pack(fill="x", pady=(0, 6))
 
-        def _load_ticket():
-            try:
-                issues = self.manager.jira.search_tickets(material, max_results=1)
-                if issues:
-                    details = self.manager.jira.get_ticket_details(issues[0])
-                else:
-                    details = None
-            except Exception:
-                details = None
+        self._tickets_frame_open = ctk.CTkFrame(scroll, fg_color="transparent")
+        self._tickets_frame_open.pack(fill="x")
 
-            def _update():
-                loading.destroy()
-                if not details:
-                    ctk.CTkLabel(
-                        ticket_area, text="Sem ticket vinculado",
-                        font=ctk.CTkFont(size=11), text_color=_P["danger"],
-                    ).pack(anchor="w")
-                    return
+        # Load async
+        self._load_open_analysis(mat, row)
 
-                # Ticket key + status
-                header = ctk.CTkFrame(ticket_area, fg_color="transparent")
-                header.pack(fill="x")
-                ctk.CTkLabel(
-                    header, text=details["key"],
-                    font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
-                    text_color=_P["accent"],
-                ).pack(side="left")
-                status_color = TicketDetailDialog._status_color(details["status"])
-                ctk.CTkLabel(
-                    header, text=f"  [{details['status']}]",
-                    font=ctk.CTkFont(size=11, weight="bold"),
-                    text_color=status_color,
-                ).pack(side="left")
-
-                # Last comment preview
-                comments = details.get("comments", [])
-                if comments:
-                    last = comments[-1]
-                    preview = last["body"][:120] + "..." if len(last["body"]) > 120 else last["body"]
-                    ctk.CTkLabel(
-                        ticket_area,
-                        text=f'{last["author"]}: {preview}',
-                        font=ctk.CTkFont(size=10), text_color=_P["text_dim"],
-                        wraplength=300, anchor="w", justify="left",
-                    ).pack(fill="x", pady=(4, 0))
-
-                ctk.CTkButton(
-                    ticket_area, text="Ver Detalhes", width=100, height=26,
-                    corner_radius=4, fg_color=_P["border"],
-                    hover_color=_P["accent"], text_color=_P["text"],
-                    font=ctk.CTkFont(size=10),
-                    command=lambda d=details: TicketDetailDialog(self, d),
-                ).pack(anchor="w", pady=(6, 0))
-
-            ticket_area.after(0, _update)
-
-        threading.Thread(target=_load_ticket, daemon=True).start()
-
-    # ── Approve / Process ─────────────────────────────────────────
-
-    def _approve(self, row, card):
-        for w in card.winfo_children():
-            if isinstance(w, ctk.CTkFrame):
-                for child in w.winfo_children():
-                    if isinstance(child, ctk.CTkButton):
-                        child.configure(state="disabled")
+    def _load_open_analysis(self, material, row):
+        ctk.CTkLabel(
+            self._llm_frame_open, text="Analisando com IA…",
+            font=ctk.CTkFont(size=11), text_color=_P["warn"],
+        ).pack(padx=12, pady=8)
 
         def _work():
-            ok = self.manager.process_single_ticket(row)
-            if ok:
-                card.after(0, card.destroy)
-                self.after(0, self._update_stats)
+            tickets = []
+            try:
+                issues = self.manager.jira.search_tickets(material, max_results=10)
+                for iss in issues:
+                    tickets.append(self.manager.jira.get_ticket_details(iss))
+            except Exception as e:
+                logger.error("Erro buscando tickets %s: %s", material, e)
+
+            mat_info = {
+                "codigo": material,
+                "descricao": row.get(Config.ZS_TXT_BREVE, ""),
+                "dias_quebra": row.get("Dias da quebra", "?"),
+                "estoque": row.get(Config.ZS_UTILIZACAO_LIVRE, "?"),
+                "lmr": row.get("LMR", ""),
+                "aplicacoes": row.get("aplicacoes", ""),
+                "all_desat": row.get("All_Desat", False),
+            }
+
+            if material in self._analysis_cache:
+                analysis = self._analysis_cache[material]
             else:
-                def _re():
-                    for w in card.winfo_children():
-                        if isinstance(w, ctk.CTkFrame):
-                            for child in w.winfo_children():
-                                if isinstance(child, ctk.CTkButton):
-                                    child.configure(state="normal")
-                card.after(0, _re)
-                logger.warning("Falha ao processar %s.", row[Config.ZS_MATERIAL])
+                analysis = analyze_material(mat_info, tickets)
+                self._analysis_cache[material] = analysis
+
+            def _update():
+                self._render_llm_result(self._llm_frame_open, analysis)
+                self._render_tickets(self._tickets_frame_open, tickets)
+            self.after(0, _update)
 
         threading.Thread(target=_work, daemon=True).start()
+
+    def _open_prev(self):
+        if self._open_idx > 0:
+            self._open_idx -= 1
+            self._show_open_item()
+
+    def _open_next(self):
+        if self._open_idx < len(self._open_items) - 1:
+            self._open_idx += 1
+            self._show_open_item()
 
 
 # ── Entry point ───────────────────────────────────────────────────

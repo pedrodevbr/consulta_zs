@@ -2,3 +2,4 @@ jira
 pandas
 openpyxl
 customtkinter
+requests

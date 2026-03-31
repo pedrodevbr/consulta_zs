@@ -73,6 +73,11 @@ class Config:
     T0182_DESC_APLICACAO = "Desc. Aplicação"
     T0182_LOCAL_ATIVO_DESAT = "Local. Ativo/Desat."
 
+    # ── OpenRouter / LLM ──────────────────────────────────────────
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+    OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+    OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+
     @staticmethod
     def get_monthly_folder() -> str:
         now = datetime.now()
@@ -90,6 +95,8 @@ class Config:
             problems.append(f"Certificado não encontrado: {cls.JIRA_CERT_PATH}")
         if not os.path.isdir(cls.BASE_PATH):
             problems.append(f"BASE_PATH não existe: {cls.BASE_PATH}")
+        if not cls.OPENROUTER_API_KEY:
+            problems.append("OPENROUTER_API_KEY não configurado (defina no .env)")
         return problems
 
 
