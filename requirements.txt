@@ -1,2 +1,4 @@
 jira
-PyQt5
+pandas
+openpyxl
+customtkinter
