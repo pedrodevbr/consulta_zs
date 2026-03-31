@@ -9,7 +9,7 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from config import setup_logging
+from config import Config, setup_logging
 from jira_service import JiraService
 from process_manager import ProcessManager
 
@@ -490,11 +490,11 @@ class App(ctk.CTk):
         card.pack(fill="x", padx=8, pady=5)
         card.grid_columnconfigure(1, weight=1)
 
-        material = str(row["Material"])
-        desc = row.get("Txt.brv.material", "")
+        material = str(row[Config.ZS_MATERIAL])
+        desc = row.get(Config.ZS_TXT_BREVE, "")
         lmr = row.get("LMR", "-")
         dias = row.get("Dias da quebra", "?")
-        estoque = row.get("Utilizacao livre", "?")
+        estoque = row.get(Config.ZS_UTILIZACAO_LIVRE, "?")
         apps = row.get("aplicacoes", "")
 
         # Left accent bar
@@ -673,11 +673,11 @@ class App(ctk.CTk):
         card.pack(fill="x", padx=8, pady=5)
         card.grid_columnconfigure(1, weight=1)
 
-        material = str(row["Material"])
-        desc = row.get("Txt.brv.material", "")
+        material = str(row[Config.ZS_MATERIAL])
+        desc = row.get(Config.ZS_TXT_BREVE, "")
         lmr = row.get("LMR", "-")
         dias = row.get("Dias da quebra", "?")
-        estoque = row.get("Utilizacao livre", "?")
+        estoque = row.get(Config.ZS_UTILIZACAO_LIVRE, "?")
 
         # Left accent bar
         ctk.CTkFrame(
@@ -808,7 +808,7 @@ class App(ctk.CTk):
                                 if isinstance(child, ctk.CTkButton):
                                     child.configure(state="normal")
                 card.after(0, _re)
-                logger.warning("Falha ao processar %s.", row["Material"])
+                logger.warning("Falha ao processar %s.", row[Config.ZS_MATERIAL])
 
         threading.Thread(target=_work, daemon=True).start()
 

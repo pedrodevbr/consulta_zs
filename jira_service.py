@@ -1,10 +1,16 @@
-"""Wrapper around the python-jira client with enhanced comment/detail methods."""
+"""Wrapper around the python-jira client with retry, 401 handling, and
+enhanced comment/detail methods."""
 
+import time
 import logging
 
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+
+class JiraAuthError(ConnectionError):
+    """Raised when JIRA returns 401 Unauthorized."""
 
 
 class JiraService:
@@ -18,18 +24,85 @@ class JiraService:
             self._connect()
         return self._client
 
-    def _connect(self):
-        try:
-            from jira import JIRA
+    # ── Connection with retry ─────────────────────────────────────
 
-            self._client = JIRA(
-                server=Config.JIRA_SERVER,
-                basic_auth=(Config.JIRA_USERNAME, Config.JIRA_PASSWORD),
-                options={"verify": Config.JIRA_CERT_PATH},
+    def _connect(self):
+        from jira import JIRA
+        from jira.exceptions import JIRAError
+
+        if not Config.JIRA_USERNAME or not Config.JIRA_PASSWORD:
+            raise JiraAuthError(
+                "JIRA_USERNAME ou JIRA_PASSWORD não configurados. "
+                "Defina as variáveis no arquivo .env."
             )
-            logger.info("Conectado ao JIRA: %s", self._client.current_user())
+
+        last_error = None
+        for attempt in range(1, Config.JIRA_MAX_RETRIES + 1):
+            try:
+                self._client = JIRA(
+                    server=Config.JIRA_SERVER,
+                    basic_auth=(Config.JIRA_USERNAME, Config.JIRA_PASSWORD),
+                    options={"verify": Config.JIRA_CERT_PATH},
+                )
+                user = self._client.current_user()
+                logger.info("Conectado ao JIRA como: %s", user)
+                return
+            except JIRAError as e:
+                last_error = e
+                status = getattr(e, "status_code", None)
+                if status == 401:
+                    raise JiraAuthError(
+                        "Autenticação JIRA falhou (401 Unauthorized). "
+                        "Verifique JIRA_USERNAME e JIRA_PASSWORD no .env."
+                    ) from e
+                if status == 403:
+                    raise JiraAuthError(
+                        "Acesso JIRA negado (403 Forbidden). "
+                        "Sua conta pode estar bloqueada — faça login no navegador "
+                        "e complete o CAPTCHA, depois tente novamente."
+                    ) from e
+                logger.warning(
+                    "Tentativa %d/%d falhou (HTTP %s): %s",
+                    attempt, Config.JIRA_MAX_RETRIES, status, e,
+                )
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    "Tentativa %d/%d falhou: %s",
+                    attempt, Config.JIRA_MAX_RETRIES, e,
+                )
+
+            if attempt < Config.JIRA_MAX_RETRIES:
+                delay = Config.JIRA_RETRY_DELAY * attempt
+                logger.info("Aguardando %ds antes de tentar novamente…", delay)
+                time.sleep(delay)
+
+        raise ConnectionError(
+            f"Não foi possível conectar ao JIRA após {Config.JIRA_MAX_RETRIES} "
+            f"tentativas. Último erro: {last_error}"
+        )
+
+    def reconnect(self):
+        """Force a fresh connection (e.g. after password change)."""
+        self._client = None
+        self._connect()
+
+    # ── Safe API wrapper ──────────────────────────────────────────
+
+    def _call(self, fn, *args, **kwargs):
+        """Execute a JIRA API call; on 401 try reconnecting once."""
+        try:
+            return fn(*args, **kwargs)
         except Exception as e:
-            raise ConnectionError(f"Erro ao conectar ao JIRA: {e}")
+            status = getattr(e, "status_code", None)
+            if status == 401:
+                logger.warning("Sessão expirada (401). Reconectando…")
+                try:
+                    self.reconnect()
+                    return fn(*args, **kwargs)
+                except Exception:
+                    pass
+            raise
 
     # ── Search ────────────────────────────────────────────────────
 
@@ -39,7 +112,9 @@ class JiraService:
                 f'project = {Config.JIRA_PROJECT} '
                 f'AND summary ~ "{code}" ORDER BY updated DESC'
             )
-            issues = self.client.search_issues(q, maxResults=max_results)
+            issues = self._call(
+                self.client.search_issues, q, maxResults=max_results,
+            )
             if not issues:
                 logger.info("Nenhum ticket para %s", code)
                 return []
@@ -53,7 +128,8 @@ class JiraService:
 
     def create_ticket(self, title, description, tipo, pieces_in_stock):
         try:
-            ticket = self.client.create_issue(
+            ticket = self._call(
+                self.client.create_issue,
                 project=Config.JIRA_PROJECT,
                 summary=title,
                 description=description,
@@ -70,15 +146,15 @@ class JiraService:
     def create_zs_ticket(self, code, short_text, reference, saldo_virtual="0"):
         desc = (
             f"Prezados\n"
-            f"Favor verificar a necessidade de reposicao do material: "
+            f"Favor verificar a necessidade de reposição do material: "
             f"{code} - {short_text}\n"
-            f"Aplicacao: []\n"
-            f"Caso seja necessaria reposicao favor indicar reference atualizada.\n"
-            f"Referencia atual: {reference}"
+            f"Aplicação: []\n"
+            f"Caso seja necessária reposição favor indicar referência atualizada.\n"
+            f"Referência atual: {reference}"
         )
         return self.create_ticket(
             title=f"{code} - {short_text}",
-            tipo="Reposicao ZS (sobre consulta)",
+            tipo="Reposição ZS (sobre consulta)",
             description=desc,
             pieces_in_stock=saldo_virtual,
         )
@@ -86,13 +162,13 @@ class JiraService:
     def create_frac_ticket(self, code, short_text, reference, saldo_virtual="0"):
         desc = (
             f"Prezados\n"
-            f"A licitacao do codigo {code} - {short_text} resultou deserta.\n"
-            f"Aplicacao: []\n"
-            f"Referencia atual: {reference}"
+            f"A licitação do código {code} - {short_text} resultou deserta.\n"
+            f"Aplicação: []\n"
+            f"Referência atual: {reference}"
         )
         return self.create_ticket(
             title=f"{code} - {short_text}",
-            tipo=f"Referencia: {reference}",
+            tipo=f"Referência: {reference}",
             description=desc,
             pieces_in_stock=saldo_virtual,
         )
@@ -101,30 +177,31 @@ class JiraService:
 
     def transition_issue(self, issue_key, transition_name):
         try:
-            issue = self.client.issue(issue_key)
-            for t in self.client.transitions(issue):
+            issue = self._call(self.client.issue, issue_key)
+            transitions = self._call(self.client.transitions, issue)
+            for t in transitions:
                 if t["name"].lower() == transition_name.lower():
-                    self.client.transition_issue(issue, t["id"])
-                    logger.info("%s -> '%s'", issue_key, transition_name)
+                    self._call(self.client.transition_issue, issue, t["id"])
+                    logger.info("%s → '%s'", issue_key, transition_name)
                     return True
-            avail = [t["name"] for t in self.client.transitions(issue)]
+            avail = [t["name"] for t in transitions]
             logger.warning(
-                "Transicao '%s' indisponivel em %s. Disponiveis: %s",
+                "Transição '%s' indisponível em %s. Disponíveis: %s",
                 transition_name, issue_key, avail,
             )
             return False
         except Exception as e:
-            logger.error("Erro transicao %s: %s", issue_key, e)
+            logger.error("Erro transição %s: %s", issue_key, e)
             return False
 
     # ── Comments ──────────────────────────────────────────────────
 
     def read_comments(self, ticket_key):
         try:
-            issue = self.client.issue(ticket_key)
+            issue = self._call(self.client.issue, ticket_key)
             return [
                 {
-                    "author": c.author.displayName,
+                    "author": getattr(c.author, "displayName", "?"),
                     "body": c.body,
                     "created": c.created,
                     "updated": c.updated,
@@ -132,7 +209,7 @@ class JiraService:
                 for c in issue.fields.comment.comments
             ]
         except Exception as e:
-            logger.error("Erro leitura comentarios %s: %s", ticket_key, e)
+            logger.error("Erro leitura comentários %s: %s", ticket_key, e)
             return []
 
     def read_all_comments(self, code, max_results=50):
@@ -148,11 +225,11 @@ class JiraService:
 
     def add_comment(self, ticket_key, body):
         try:
-            self.client.add_comment(ticket_key, body)
-            logger.info("Comentario adicionado: %s", ticket_key)
+            self._call(self.client.add_comment, ticket_key, body)
+            logger.info("Comentário adicionado: %s", ticket_key)
             return True
         except Exception as e:
-            logger.error("Erro comentario %s: %s", ticket_key, e)
+            logger.error("Erro comentário %s: %s", ticket_key, e)
             return False
 
     def find_last_comment(self, code):
@@ -168,9 +245,9 @@ class JiraService:
         """Return a structured dict with full ticket information and comments."""
         fields = issue.fields
         assignee = (
-            getattr(fields.assignee, "displayName", "Nao atribuido")
+            getattr(fields.assignee, "displayName", "Não atribuído")
             if fields.assignee
-            else "Nao atribuido"
+            else "Não atribuído"
         )
         reporter = (
             getattr(fields.reporter, "displayName", "")

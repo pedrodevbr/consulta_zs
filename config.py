@@ -1,4 +1,4 @@
-"""Configuracao central — le variaveis de ambiente / .env."""
+"""Configuração central — lê variáveis de ambiente / .env."""
 
 import os
 import logging
@@ -25,16 +25,18 @@ class Config:
         "ItaipuBinacionalRootCA3.pem",
     )
     JIRA_PROJECT = "GCSMIT"
+    JIRA_MAX_RETRIES = 3
+    JIRA_RETRY_DELAY = 2  # seconds
 
     TEMPLATE_JIRA = (
         "Prezados,\n"
-        "Favor informar se ha necessidade de reposicao para o "
+        "Favor informar se há necessidade de reposição para o "
         "CODIGO ZS {codigo_zs} - {descricao_zs}.\n"
-        "LMR vinculads: {lmr_vinculados}\n"
-        "Aplicacoes: {aplicacoes}\n"
-        "Agradeco desde ja a atencao."
+        "LMR vinculadas: {lmr_vinculados}\n"
+        "Aplicações: {aplicacoes}\n"
+        "Agradeço desde já a atenção."
     )
-    DONE_STATUSES = ["Terminado", "Concluido", "Done"]
+    DONE_STATUSES = ["Terminado", "Concluído", "Done"]
 
     # SAP
     SAP_TRANSACTION = "zmm0133"
@@ -45,21 +47,62 @@ class Config:
     SETOR_ATIVIDADE = 31
 
     # Paths
-    BASE_PATH = os.environ.get("BASE_PATH", ".")
+    BASE_PATH = os.environ.get(
+        "BASE_PATH",
+        r"C:\Users\pedrohvb\OneDrive - ITAIPU Binacional\Projetos\consulta_zs",
+    )
+
+    # ── Column names — ZS spreadsheet ─────────────────────────────
+    # Keeps column names in one place; if SAP changes a header, fix here only.
+    ZS_EVENTO = "Evento"
+    ZS_MATERIAL = "Material"
+    ZS_TXT_BREVE = "Txt.brv.material"
+    ZS_DATA_QUEBRA = "Data da quebra"
+    ZS_SITUACAO_ANALISE = "Situação da análise"
+    ZS_UTILIZACAO_LIVRE = "Utilização livre"
+    ZS_SETOR_ATIVIDADE = "Setor de atividade"
+    ZS_TIPO_MRP = "Tipo de MRP"
+    ZS_STAT_MAT = "Stat.mat.todos cent."
+    ZS_PLANEJADOR_MRP = "Planejador MRP"
+
+    # ── Column names — 0182 spreadsheet ───────────────────────────
+    T0182_MATERIAL = "Material"
+    T0182_DESC_SAP = "Desc. SAP"
+    T0182_COD_SMR = "Cód. SMR"
+    T0182_COD_APLICACAO = "Cód Aplicação"
+    T0182_DESC_APLICACAO = "Desc. Aplicação"
+    T0182_LOCAL_ATIVO_DESAT = "Local. Ativo/Desat."
 
     @staticmethod
     def get_monthly_folder() -> str:
         now = datetime.now()
         return f"{now.year}-{now.month:02d}"
 
+    @classmethod
+    def validate(cls) -> list[str]:
+        """Return a list of configuration problems (empty = OK)."""
+        problems = []
+        if not cls.JIRA_USERNAME:
+            problems.append("JIRA_USERNAME não configurado (defina no .env)")
+        if not cls.JIRA_PASSWORD:
+            problems.append("JIRA_PASSWORD não configurado (defina no .env)")
+        if not os.path.isfile(cls.JIRA_CERT_PATH):
+            problems.append(f"Certificado não encontrado: {cls.JIRA_CERT_PATH}")
+        if not os.path.isdir(cls.BASE_PATH):
+            problems.append(f"BASE_PATH não existe: {cls.BASE_PATH}")
+        return problems
+
 
 def setup_logging(log_to_file: bool = True):
     log_filename = f"log_processo_zs_{datetime.now():%Y-%m-%d}.log"
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     if log_to_file:
-        handlers.append(logging.FileHandler(log_filename, encoding="utf-8"))
+        try:
+            handlers.append(logging.FileHandler(log_filename, encoding="utf-8"))
+        except OSError:
+            pass  # can't write log file — continue with console only
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format="%(asctime)s — %(levelname)s — %(message)s",
         handlers=handlers,
     )
