@@ -7,9 +7,9 @@ import logging
 import pandas as pd
 
 from config import Config
-from sap_service import SapService
-from jira_service import JiraService, JiraAuthError
-from data_processor import DataProcessor
+from services.sap_service import SapService
+from services.jira_service import JiraService, JiraAuthError
+from services.data_processor import DataProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,48 @@ class ProcessManager:
                     logger.info("%s em andamento (%s)", issues[0].key, status)
             except Exception as e:
                 logger.error("Erro verificação %s: %s", mat, e)
+
+    # ── SAP actions dispatcher ────────────────────────────────────
+
+    def run_sap_action(self, action: str, material: str, **kwargs) -> tuple[bool, str]:
+        """Execute a SAP action. Returns (success, message)."""
+        try:
+            if action == "ajustar_nivel":
+                pr = kwargs.get("pr", "")
+                max_valor = kwargs.get("max_valor", "")
+                if not pr or not max_valor:
+                    return False, "PR e MAX são obrigatórios"
+                ok = self.sap.ajustar_nivel(material, pr, max_valor)
+                return ok, "Nível ajustado" if ok else "Falha ao ajustar nível"
+
+            if action == "rodar_mrp":
+                ok = self.sap.rodar_mrp(material)
+                return ok, "MRP executado" if ok else "Falha no MRP"
+
+            if action == "emitir_requisicao":
+                qtd = kwargs.get("quantidade", "")
+                if not qtd:
+                    return False, "Quantidade é obrigatória"
+                ok = self.sap.emitir_requisicao(material, qtd)
+                return ok, "Requisição emitida" if ok else "Falha na requisição"
+
+            if action == "gerar_ordem":
+                qtd = kwargs.get("quantidade", "")
+                if not qtd:
+                    return False, "Quantidade é obrigatória"
+                ok = self.sap.gerar_ordem_planejada(material, qtd)
+                return ok, "Ordem planejada gerada" if ok else "Falha na ordem"
+
+            if action == "encontrar_requisicao":
+                req = self.sap.encontrar_requisicao(material)
+                if req:
+                    return True, f"Requisição encontrada: {req}"
+                return False, "Nenhuma requisição encontrada"
+
+            return False, f"Ação desconhecida: {action}"
+        except Exception as e:
+            logger.error("Erro SAP '%s' para %s: %s", action, material, e)
+            return False, str(e)
 
     # ── SAP report extraction ─────────────────────────────────────
 

@@ -4,6 +4,7 @@ __pycache__/
 .env
 *.log
 *.xlsx
+analysis_cache.json
 !requirements.txt
 .venv/
 venv/

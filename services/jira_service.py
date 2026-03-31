@@ -107,7 +107,52 @@ class JiraService:
     # ── Search ────────────────────────────────────────────────────
 
     def get_field_options(self, field_id="customfield_17633"):
-        """List allowed values for a custom select field."""
+        """List allowed values for a custom select field.
+        Supports both legacy createmeta and Jira 9.12+ REST API.
+        """
+        # Try the new REST endpoint first (Jira 9.12+)
+        try:
+            import requests
+            url = (
+                f"{Config.JIRA_SERVER}/rest/api/2/issue/createmeta/"
+                f"{Config.JIRA_PROJECT}/issuetypes"
+            )
+            resp = requests.get(
+                url,
+                auth=(Config.JIRA_USERNAME, Config.JIRA_PASSWORD),
+                verify=Config.JIRA_CERT_PATH,
+                timeout=15,
+            )
+            if resp.ok:
+                for itype in resp.json().get("values", resp.json().get("issueTypes", [])):
+                    itype_id = itype.get("id")
+                    if not itype_id:
+                        continue
+                    fields_url = (
+                        f"{Config.JIRA_SERVER}/rest/api/2/issue/createmeta/"
+                        f"{Config.JIRA_PROJECT}/issuetypes/{itype_id}"
+                    )
+                    fresp = requests.get(
+                        fields_url,
+                        auth=(Config.JIRA_USERNAME, Config.JIRA_PASSWORD),
+                        verify=Config.JIRA_CERT_PATH,
+                        timeout=15,
+                    )
+                    if not fresp.ok:
+                        continue
+                    for field in fresp.json().get("values", fresp.json().get("fields", [])):
+                        fid = field.get("fieldId", field.get("key", ""))
+                        if fid == field_id:
+                            options = field.get("allowedValues", [])
+                            values = [o.get("value", o.get("name", "?")) for o in options]
+                            logger.info("Opções para %s: %s", field_id, values)
+                            return values
+                logger.warning("Campo %s não encontrado via REST.", field_id)
+                return []
+        except Exception as e:
+            logger.warning("REST createmeta falhou: %s — tentando legado…", e)
+
+        # Fallback: legacy createmeta
         try:
             meta = self._call(
                 self.client.createmeta,
@@ -120,11 +165,8 @@ class JiraService:
                     field = itype.get("fields", {}).get(field_id, {})
                     options = field.get("allowedValues", [])
                     values = [o.get("value", o.get("name", "?")) for o in options]
-                    logger.info(
-                        "Opções disponíveis para %s: %s", field_id, values,
-                    )
+                    logger.info("Opções para %s: %s", field_id, values)
                     return values
-            logger.warning("Campo %s não encontrado nos metadados.", field_id)
             return []
         except Exception as e:
             logger.error("Erro ao buscar opções de %s: %s", field_id, e)
