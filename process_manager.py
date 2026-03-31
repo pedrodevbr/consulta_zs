@@ -33,6 +33,8 @@ class ProcessManager:
         logger.info("Conectando ao Jira…")
         try:
             _ = self.jira.client
+            # Log available options for customfield_17633 to help debug
+            self.jira.get_field_options("customfield_17633")
         except JiraAuthError as e:
             logger.error("Falha de autenticação JIRA: %s", e)
         except ConnectionError as e:

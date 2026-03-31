@@ -106,6 +106,30 @@ class JiraService:
 
     # ── Search ────────────────────────────────────────────────────
 
+    def get_field_options(self, field_id="customfield_17633"):
+        """List allowed values for a custom select field."""
+        try:
+            meta = self._call(
+                self.client.createmeta,
+                projectKeys=Config.JIRA_PROJECT,
+                issuetypeNames="Task",
+                expand="projects.issuetypes.fields",
+            )
+            for proj in meta.get("projects", []):
+                for itype in proj.get("issuetypes", []):
+                    field = itype.get("fields", {}).get(field_id, {})
+                    options = field.get("allowedValues", [])
+                    values = [o.get("value", o.get("name", "?")) for o in options]
+                    logger.info(
+                        "Opções disponíveis para %s: %s", field_id, values,
+                    )
+                    return values
+            logger.warning("Campo %s não encontrado nos metadados.", field_id)
+            return []
+        except Exception as e:
+            logger.error("Erro ao buscar opções de %s: %s", field_id, e)
+            return []
+
     def search_tickets(self, code, max_results=5):
         try:
             q = (
