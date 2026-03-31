@@ -64,6 +64,9 @@ class Config:
     ZS_TIPO_MRP = "Tipo de MRP"
     ZS_STAT_MAT = "Stat.mat.todos cent."
     ZS_PLANEJADOR_MRP = "Planejador MRP"
+    ZS_ORDEM_PLANEJADA = "Ordem planejada"
+    ZS_REQ_COMPRA = "Req.Compra"
+    ZS_PEDIDO = "Pedido"
 
     # ── Column names — 0182 spreadsheet ───────────────────────────
     T0182_MATERIAL = "Material"

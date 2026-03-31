@@ -50,6 +50,7 @@ def _build_user_prompt(material_info: dict, tickets: list[dict]) -> str:
         f"- LMR: {material_info.get('lmr', '?')}",
         f"- Aplicações: {material_info.get('aplicacoes', '—')}",
         f"- Todas localizações desativadas: {material_info.get('all_desat', False)}",
+        f"- Ordem planejada: {material_info.get('ordem_planejada', '—')}",
         "",
     ]
 
