@@ -13,7 +13,6 @@ from services.process_manager import ProcessManager
 from services.llm_service import analyze_material
 from gui.theme import P
 from gui.widgets import render_nav, render_material_info, render_llm, render_tickets
-from gui.sap_actions import SapActionsPanel
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,7 @@ class App(ctk.CTk):
         # ── Sidebar ───────────────────────────────────────────────
         sb = ctk.CTkFrame(self, width=210, corner_radius=0, fg_color=P["surface"])
         sb.grid(row=0, column=0, sticky="nsew")
-        sb.grid_rowconfigure(8, weight=1)
+        sb.grid_rowconfigure(7, weight=1)
         sb.grid_propagate(False)
 
         ctk.CTkLabel(sb, text="CONSULTAS ZS",
@@ -76,40 +75,35 @@ class App(ctk.CTk):
         btn = dict(height=32, corner_radius=6, border_width=0,
                    font=ctk.CTkFont(size=11, weight="bold"))
 
-        self.btn_extract = ctk.CTkButton(sb, text="Extrair SAP",
-            fg_color=P["surface_alt"], hover_color=P["border"],
-            text_color=P["text"], command=self._on_extract, **btn)
-        self.btn_extract.grid(row=1, column=0, padx=10, pady=(0, 3), sticky="ew")
-
         self.btn_load = ctk.CTkButton(sb, text="Carregar Dados",
             fg_color=P["accent"], hover_color=P["accent_hover"],
             text_color=P["bg"], command=self._on_load, **btn)
-        self.btn_load.grid(row=2, column=0, padx=10, pady=(0, 3), sticky="ew")
+        self.btn_load.grid(row=1, column=0, padx=10, pady=(0, 3), sticky="ew")
 
         self.btn_check = ctk.CTkButton(sb, text="Verificar Abertas",
             fg_color=P["surface_alt"], hover_color=P["border"],
             text_color=P["text"], command=self._on_check, state="disabled", **btn)
-        self.btn_check.grid(row=3, column=0, padx=10, pady=(0, 3), sticky="ew")
+        self.btn_check.grid(row=2, column=0, padx=10, pady=(0, 3), sticky="ew")
 
         ctk.CTkFrame(sb, height=1, fg_color=P["border"]).grid(
-            row=4, column=0, sticky="ew", padx=10, pady=6)
+            row=3, column=0, sticky="ew", padx=10, pady=6)
 
         # Stats
         sf = ctk.CTkFrame(sb, fg_color="transparent")
-        sf.grid(row=5, column=0, padx=14, sticky="new")
+        sf.grid(row=4, column=0, padx=14, sticky="new")
         self.lbl_total = self._stat(sf, "Total", 0)
         self.lbl_new = self._stat(sf, "Novas", 1)
         self.lbl_open = self._stat(sf, "Em consulta", 2)
 
         # Console toggle
         ctk.CTkFrame(sb, height=1, fg_color=P["border"]).grid(
-            row=6, column=0, sticky="ew", padx=10, pady=6)
+            row=5, column=0, sticky="ew", padx=10, pady=6)
 
         self.btn_console = ctk.CTkButton(sb, text="Console ▸", height=24,
             corner_radius=4, fg_color="transparent", hover_color=P["surface_alt"],
             text_color=P["text_dim"], font=ctk.CTkFont(size=10),
             anchor="w", command=self._toggle_console)
-        self.btn_console.grid(row=7, column=0, padx=10, sticky="ew")
+        self.btn_console.grid(row=6, column=0, padx=10, sticky="ew")
 
         self.log_frame = ctk.CTkFrame(sb, fg_color="transparent")
         self.log_box = ctk.CTkTextbox(self.log_frame, height=150,
@@ -187,7 +181,7 @@ class App(ctk.CTk):
         self._console_visible = not self._console_visible
         if self._console_visible:
             self.btn_console.configure(text="Console ▾")
-            self.log_frame.grid(row=8, column=0, sticky="nsew", padx=4, pady=(0, 4))
+            self.log_frame.grid(row=7, column=0, sticky="nsew", padx=4, pady=(0, 4))
         else:
             self.btn_console.configure(text="Console ▸")
             self.log_frame.grid_forget()
@@ -211,18 +205,6 @@ class App(ctk.CTk):
         self._idx[self._mode] = val
 
     # ── Thread wrappers ───────────────────────────────────────────
-
-    def _on_extract(self):
-        self.btn_extract.configure(state="disabled", text="Extraindo…")
-        self._toggle_console() if not self._console_visible else None
-        def _w():
-            try:
-                self.manager.extract_sap_reports()
-            except Exception as e:
-                logger.error("Erro extração: %s", e)
-            self.btn_extract.after(0, lambda: self.btn_extract.configure(
-                state="normal", text="Extrair SAP"))
-        threading.Thread(target=_w, daemon=True).start()
 
     def _on_load(self):
         self.btn_load.configure(state="disabled", text="Processando…")
@@ -284,9 +266,6 @@ class App(ctk.CTk):
 
         # Material info
         render_material_info(scroll, row)
-
-        # SAP actions (collapsible)
-        SapActionsPanel(scroll, self.manager, mat, self)
 
         # Action buttons (only for "novas" mode)
         if self._mode == "novas":
