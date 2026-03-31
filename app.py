@@ -3,7 +3,9 @@ Consultas ZS — Itaipu Binacional
 CustomTkinter GUI: one material at a time, LLM-powered analysis.
 """
 
+import json
 import logging
+import os
 import threading
 import webbrowser
 from datetime import datetime
@@ -68,7 +70,8 @@ class App(ctk.CTk):
         self._open_items = []
         self._new_idx = 0
         self._open_idx = 0
-        self._analysis_cache = {}
+        # Cache: material_code → {"tickets": [...], "analysis": {...}}
+        self._cache = {}
 
         self._build_layout()
         self._attach_logger()
@@ -233,7 +236,8 @@ class App(ctk.CTk):
                 self._open_items = [row for _, row in opn.iterrows()]
                 self._new_idx = 0
                 self._open_idx = 0
-                self._analysis_cache.clear()
+                self._cache.clear()
+                self._load_cache_from_disk()
                 self.after(0, self._update_stats)
                 self.after(0, self._show_new_item)
                 self.after(0, self._show_open_item)
@@ -556,38 +560,51 @@ class App(ctk.CTk):
             self._open_idx += 1
             self._show_open_item()
 
-    # ── Shared async loader ───────────────────────────────────────
+    # ── Shared async loader with full cache ──────────────────────
 
     def _load_analysis(self, material, row, llm_frame, tkt_frame):
+        # If fully cached, render immediately — no thread needed
+        cached = self._cache.get(material)
+        if cached and "tickets" in cached and "analysis" in cached:
+            self._render_llm(llm_frame, cached["analysis"])
+            self._render_tickets(tkt_frame, cached["tickets"])
+            return
+
         ctk.CTkLabel(llm_frame, text="Analisando…",
                      font=ctk.CTkFont(size=10), text_color=_P["warn"]
                      ).pack(padx=10, pady=6)
 
         def _work():
-            tickets = []
-            try:
-                issues = self.manager.jira.search_tickets(material, max_results=10)
-                for iss in issues:
-                    tickets.append(self.manager.jira.get_ticket_details(iss))
-            except Exception as e:
-                logger.error("Erro tickets %s: %s", material, e)
+            entry = self._cache.setdefault(material, {})
 
-            mat_info = {
-                "codigo": material,
-                "descricao": row.get(Config.ZS_TXT_BREVE, ""),
-                "dias_quebra": row.get("Dias da quebra", "?"),
-                "estoque": row.get(Config.ZS_UTILIZACAO_LIVRE, "?"),
-                "lmr": row.get("LMR", ""),
-                "aplicacoes": row.get("aplicacoes", ""),
-                "all_desat": row.get("All_Desat", False),
-                "ordem_planejada": row.get(Config.ZS_ORDEM_PLANEJADA, ""),
-            }
+            # Tickets: fetch once, cache forever (within session)
+            if "tickets" not in entry:
+                tickets = []
+                try:
+                    issues = self.manager.jira.search_tickets(material, max_results=10)
+                    for iss in issues:
+                        tickets.append(self.manager.jira.get_ticket_details(iss))
+                except Exception as e:
+                    logger.error("Erro tickets %s: %s", material, e)
+                entry["tickets"] = tickets
+            tickets = entry["tickets"]
 
-            if material in self._analysis_cache:
-                analysis = self._analysis_cache[material]
-            else:
-                analysis = analyze_material(mat_info, tickets)
-                self._analysis_cache[material] = analysis
+            # LLM analysis: run once, cache forever (within session)
+            if "analysis" not in entry:
+                mat_info = {
+                    "codigo": material,
+                    "descricao": row.get(Config.ZS_TXT_BREVE, ""),
+                    "dias_quebra": row.get("Dias da quebra", "?"),
+                    "estoque": row.get(Config.ZS_UTILIZACAO_LIVRE, "?"),
+                    "lmr": row.get("LMR", ""),
+                    "aplicacoes": row.get("aplicacoes", ""),
+                    "all_desat": row.get("All_Desat", False),
+                    "ordem_planejada": row.get(Config.ZS_ORDEM_PLANEJADA, ""),
+                }
+                entry["analysis"] = analyze_material(mat_info, tickets)
+                self._save_cache_to_disk()
+
+            analysis = entry["analysis"]
 
             def _update():
                 self._render_llm(llm_frame, analysis)
@@ -595,6 +612,37 @@ class App(ctk.CTk):
             self.after(0, _update)
 
         threading.Thread(target=_work, daemon=True).start()
+
+    # ── Disk cache for processed data ─────────────────────────────
+
+    def _save_cache_to_disk(self):
+        """Save analysis cache to disk so it persists across restarts."""
+        cache_path = os.path.join(self.manager.folder, "analysis_cache.json")
+        try:
+            serializable = {}
+            for mat, entry in self._cache.items():
+                serializable[mat] = {
+                    "tickets": entry.get("tickets", []),
+                    "analysis": entry.get("analysis", {}),
+                }
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(serializable, f, ensure_ascii=False, indent=2)
+            logger.info("Cache salvo: %s (%d materiais)", cache_path, len(serializable))
+        except Exception as e:
+            logger.error("Erro ao salvar cache: %s", e)
+
+    def _load_cache_from_disk(self):
+        """Load analysis cache from disk if available."""
+        cache_path = os.path.join(self.manager.folder, "analysis_cache.json")
+        if not os.path.isfile(cache_path):
+            return
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._cache.update(data)
+            logger.info("Cache carregado: %d materiais", len(data))
+        except Exception as e:
+            logger.error("Erro ao carregar cache: %s", e)
 
 
 if __name__ == "__main__":
