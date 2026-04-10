@@ -1,6 +1,8 @@
 """Wrapper for SAP GUI Scripting via COM automation."""
 
 import logging
+import os
+import time
 
 from config import Config
 
@@ -61,6 +63,108 @@ class SapService:
     def _run_transaction(self, tcode: str):
         self.session.findById("wnd[0]/tbar[0]/okcd").text = tcode
         self.session.findById("wnd[0]").sendVKey(0)
+
+    # ── Report extraction ────────────────────────────────────────
+
+    def extract_zmm0133(self, output_path: str, filename: str = "zs.xlsx"):
+        """Run ZMM0133 transaction and export the ALV grid to Excel."""
+        dest = os.path.join(output_path, filename)
+        try:
+            self._go_back(2)
+            self._run_transaction(Config.SAP_TRANSACTION)
+
+            # Selection screen
+            self.session.findById(
+                "wnd[0]/usr/ctxtS_CENTRO-LOW"
+            ).text = Config.SAP_CENTER
+            self.session.findById(
+                "wnd[0]/usr/ctxtS_SETOR-LOW"
+            ).text = str(Config.SETOR_ATIVIDADE)
+            self.session.findById("wnd[0]").sendVKey(8)  # Execute
+
+            time.sleep(2)
+
+            # Export ALV grid → spreadsheet
+            grid = self.session.findById(
+                "wnd[0]/usr/cntlGRID1/shellcont/shell"
+            )
+            grid.pressToolbarContextButton("&MB_EXPORT")
+            grid.selectContextMenuItem("&XXL")
+
+            time.sleep(1)
+            # Fill save dialog
+            self.session.findById(
+                "wnd[1]/usr/ctxtDY_PATH"
+            ).text = output_path
+            self.session.findById(
+                "wnd[1]/usr/ctxtDY_FILENAME"
+            ).text = filename
+            self.session.findById(
+                "wnd[1]/tbar[0]/btn[11]"
+            ).press()  # Replace if exists
+
+            time.sleep(3)
+            self._go_back(1)
+
+            logger.info("ZMM0133 exportada: %s", dest)
+            return True
+        except Exception as e:
+            logger.error("Erro ao extrair ZMM0133: %s", e)
+            return False
+
+    def extract_zmm0182(self, output_path: str, filename: str = "0182.xlsx"):
+        """Run ZMM0182 transaction and export the ALV grid to Excel."""
+        dest = os.path.join(output_path, filename)
+        try:
+            self._go_back(2)
+            self._run_transaction("zmm0182")
+
+            # Selection screen
+            self.session.findById(
+                "wnd[0]/usr/ctxtS_CENTRO-LOW"
+            ).text = Config.SAP_CENTER
+
+            # Paste materials from clipboard
+            self.session.findById(
+                "wnd[0]/usr/btn%_S_MATNR_%_APP_%-VALU_PUSH"
+            ).press()
+            time.sleep(1)
+
+            # Paste (Ctrl+V into multiple selection)
+            self.session.findById("wnd[1]/tbar[0]/btn[24]").press()
+            time.sleep(1)
+            self.session.findById("wnd[1]/tbar[0]/btn[8]").press()
+            time.sleep(1)
+
+            self.session.findById("wnd[0]").sendVKey(8)  # Execute
+            time.sleep(2)
+
+            # Export ALV grid → spreadsheet
+            grid = self.session.findById(
+                "wnd[0]/usr/cntlGRID1/shellcont/shell"
+            )
+            grid.pressToolbarContextButton("&MB_EXPORT")
+            grid.selectContextMenuItem("&XXL")
+
+            time.sleep(1)
+            self.session.findById(
+                "wnd[1]/usr/ctxtDY_PATH"
+            ).text = output_path
+            self.session.findById(
+                "wnd[1]/usr/ctxtDY_FILENAME"
+            ).text = filename
+            self.session.findById(
+                "wnd[1]/tbar[0]/btn[11]"
+            ).press()
+
+            time.sleep(3)
+            self._go_back(1)
+
+            logger.info("ZMM0182 exportada: %s", dest)
+            return True
+        except Exception as e:
+            logger.error("Erro ao extrair ZMM0182: %s", e)
+            return False
 
     # ── Consultation status ───────────────────────────────────────
 
