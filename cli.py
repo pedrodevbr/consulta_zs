@@ -3,9 +3,13 @@
 import json
 import logging
 import os
+import time
+
+import pandas as pd
 
 from config import Config
 from services.process_manager import ProcessManager
+from services.sap_service import SapService
 from services.llm_service import analyze_material
 
 logger = logging.getLogger(__name__)
@@ -276,6 +280,50 @@ def view_items(manager: ProcessManager, cache: dict, items: list, mode: str):
                 idx += 1
 
 
+# ── SAP extraction pipeline ──────────────────────────────────────
+
+def sap_pipeline():
+    """Extract ZMM0133 and ZMM0182 reports from SAP."""
+    month_folder = Config.get_monthly_folder()
+    output_path = os.path.join(Config.BASE_PATH, month_folder)
+    os.makedirs(output_path, exist_ok=True)
+
+    sap = SapService()
+
+    # 1. Extrair ZMM0133
+    logger.info("Iniciando ZMM0133...")
+    print(f"  {YELLOW}Extraindo ZMM0133...{RESET}")
+    sap.extract_zmm0133(output_path, "zs.xlsx")
+    logger.info("ZMM0133 exportada. Processando dados...")
+    print(f"  {GREEN}ZMM0133 exportada.{RESET}")
+    time.sleep(2)
+
+    # 2. Ler materiais e copiar para clipboard
+    zmm0133_file = os.path.join(output_path, "zs.xlsx")
+    try:
+        df = pd.read_excel(zmm0133_file, dtype=str)
+        col = "Material" if "Material" in df.columns else df.columns[0]
+        materiais = df[col].dropna().unique()
+        logger.info("%d materiais encontrados.", len(materiais))
+        print(f"  {DIM}{len(materiais)} materiais encontrados.{RESET}")
+
+        pd.DataFrame(materiais).to_clipboard(index=False, header=False)
+        logger.info("Materiais copiados para a area de transferencia.")
+        print(f"  {GREEN}Materiais copiados para a area de transferencia.{RESET}")
+    except Exception as e:
+        logger.error("Erro ao ler o arquivo Excel: %s", e)
+        print(f"  {RED}Erro ao ler o arquivo Excel: {e}{RESET}")
+        return
+
+    # 3. Extrair ZMM0182
+    logger.info("Iniciando ZMM0182...")
+    print(f"  {YELLOW}Extraindo ZMM0182...{RESET}")
+    sap.extract_zmm0182(output_path, "0182.xlsx")
+    logger.info("Processo finalizado com sucesso!")
+    print(f"  {GREEN}Relatorios extraidos com sucesso!{RESET}")
+    print(f"  {DIM}Pasta: {output_path}{RESET}")
+
+
 # ── Main loop ────────────────────────────────────────────────────
 
 def run():
@@ -300,10 +348,12 @@ def run():
             print(f"  [2] Ver Em Consulta ({n_consulta})")
             print(f"  [3] Verificar Abertas")
             print(f"  [4] Recarregar Dados")
-            print(f"  [5] Sair")
+            print(f"  [5] Extrair Relatorios SAP")
+            print(f"  [6] Sair")
         else:
             print(f"\n  [1] Carregar Dados")
-            print(f"  [2] Sair")
+            print(f"  [2] Extrair Relatorios SAP")
+            print(f"  [3] Sair")
 
         choice = input(f"\n  > ").strip()
 
@@ -325,6 +375,10 @@ def run():
                 else:
                     print(f"  {RED}Falha ao carregar planilhas.{RESET}")
             elif choice == "2":
+                print(f"\n  {YELLOW}Extraindo relatorios do SAP...{RESET}")
+                sap_pipeline()
+                input(f"  {DIM}Enter para continuar...{RESET}")
+            elif choice == "3":
                 print(f"\n  {DIM}Saindo...{RESET}")
                 break
         else:
@@ -350,5 +404,9 @@ def run():
                 else:
                     print(f"  {RED}Falha ao carregar planilhas.{RESET}")
             elif choice == "5":
+                print(f"\n  {YELLOW}Extraindo relatorios do SAP...{RESET}")
+                sap_pipeline()
+                input(f"  {DIM}Enter para continuar...{RESET}")
+            elif choice == "6":
                 print(f"\n  {DIM}Saindo...{RESET}")
                 break
